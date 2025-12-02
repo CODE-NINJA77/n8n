@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>AR Restaurant Menu</title>
+  <script src="https://cdn.jsdelivr.net/npm/three@r128/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ar.js@3.3.2/three.js/ar.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #000;
+      overflow: hidden;
+      width: 100%;
+      height: 100vh;
+    }
+
+    #arContainer {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .ar-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    .ar-header {
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+      padding: 16px;
+      text-align: center;
+      color: white;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .ar-header p {
+      margin: 4px 0;
+    }
+
+    .ar-instruction {
+      font-weight: 500;
+      font-size: 16px;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    .ar-footer {
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+      padding: 12px;
+      display: flex;
+      gap: 12px;
+    }
+
+    .ar-btn {
+      flex: 1;
+      pointer-events: all;
+      padding: 14px 16px;
+      border: none;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .btn-fallback {
+      background: linear-gradient(135deg, #8B5CF6 0%, #A78BFA 100%);
+      color: white;
+      box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+    }
+
+    .btn-fallback:active {
+      transform: scale(0.98);
+      box-shadow: 0 2px 6px rgba(139, 92, 246, 0.3);
+    }
+
+    #fallbackContainer {
+      display: none;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+      position: relative;
+    }
+
+    #fallbackContainer.active {
+      display: flex;
+    }
+
+    .fallback-content {
+      background: white;
+      border-radius: 24px;
+      padding: 40px;
+      max-width: 500px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      text-align: center;
+    }
+
+    .fallback-header {
+      font-size: 28px;
+      font-weight: 700;
+      color: #0F172A;
+      margin-bottom: 12px;
+    }
+
+    .fallback-subtext {
+      font-size: 14px;
+      color: #64748B;
+      margin-bottom: 32px;
+      line-height: 1.6;
+    }
+
+    .menu-preview {
+      background: linear-gradient(135deg, #F0F9FF 0%, #E0F2FE 100%);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 32px;
+      text-align: left;
+    }
+
+    .menu-preview-title {
+      font-weight: 700;
+      color: #0C4A6E;
+      margin-bottom: 16px;
+      font-size: 16px;
+    }
+
+    .menu-item-preview {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(12, 74, 110, 0.1);
+      font-size: 14px;
+      color: #0F172A;
+    }
+
+    .menu-item-preview:last-child {
+      border-bottom: none;
+    }
+
+    .menu-item-name {
+      font-weight: 500;
+    }
+
+    .menu-item-price {
+      color: #0891B2;
+      font-weight: 600;
+    }
+
+    .fallback-btn {
+      background: linear-gradient(135deg, #10B981 0%, #06B6D4 100%);
+      color: white;
+      border: none;
+      padding: 16px 32px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      width: 100%;
+      transition: all 0.3s ease;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+    }
+
+    .fallback-btn:active {
+      transform: scale(0.98);
+      box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
+    }
+
+    .ar-error {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: white;
+      padding: 32px;
+      border-radius: 20px;
+      max-width: 400px;
+      text-align: center;
+      z-index: 100;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+
+    .ar-error.show {
+      display: block;
+      animation: slideIn 0.3s ease;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.95);
+      }
+      to {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
+    }
+
+    .error-icon {
+      font-size: 40px;
+      margin-bottom: 12px;
+    }
+
+    .error-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: #0F172A;
+      margin-bottom: 8px;
+    }
+
+    .error-message {
+      font-size: 14px;
+      color: #64748B;
+      margin-bottom: 24px;
+      line-height: 1.6;
+    }
+
+    .error-btn {
+      background: linear-gradient(135deg, #EF4444 0%, #F87171 100%);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .error-btn:active {
+      transform: scale(0.98);
+    }
+
+    @media (max-width: 480px) {
+      .fallback-content {
+        padding: 24px;
+      }
+
+      .fallback-header {
+        font-size: 24px;
+      }
+
+      .ar-header {
+        padding: 12px;
+        font-size: 13px;
+      }
+
+      .ar-instruction {
+        font-size: 14px;
+      }
+
+      .ar-footer {
+        padding: 10px;
+        gap: 10px;
+      }
+
+      .ar-btn {
+        padding: 12px 14px;
+        font-size: 13px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="arContainer">
+    <div class="ar-overlay">
+      <div class="ar-header">
+        <p class="ar-instruction">Point your camera at a flat surface</p>
+        <p style="font-size: 12px; margin-top: 8px;">Move around to see the menu</p>
+      </div>
+      <div class="ar-footer">
+        <button class="ar-btn btn-fallback" id="fallbackBtn">Order Without AR</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="fallbackContainer">
+    <div class="fallback-content">
+      <div class="fallback-header">Welcome to Our Restaurant</div>
+      <div class="fallback-subtext">AR not available on your device. View our menu and place your order below.</div>
+
+      <div class="menu-preview">
+        <div class="menu-preview-title">Featured Menu Items</div>
+        <div class="menu-item-preview">
+          <span class="menu-item-name">Masala Dosa</span>
+          <span class="menu-item-price">₹60</span>
+        </div>
+        <div class="menu-item-preview">
+          <span class="menu-item-name">Idly</span>
+          <span class="menu-item-price">₹30</span>
+        </div>
+        <div class="menu-item-preview">
+          <span class="menu-item-name">Uttapam</span>
+          <span class="menu-item-price">₹50</span>
+        </div>
+        <div class="menu-item-preview">
+          <span class="menu-item-name">Puri Bhaji</span>
+          <span class="menu-item-price">₹45</span>
+        </div>
+        <div class="menu-item-preview">
+          <span class="menu-item-name">Coffee</span>
+          <span class="menu-item-price">₹20</span>
+        </div>
+      </div>
+
+      <button class="fallback-btn" id="fallbackOrderBtn">Order Now</button>
+    </div>
+  </div>
+
+  <div class="ar-error" id="errorDialog">
+    <div class="error-icon">⚠️</div>
+    <div class="error-title">Error</div>
+    <div class="error-message" id="errorMessage">An error occurred. Please try again.</div>
+    <button class="error-btn" id="errorBtn">OK</button>
+  </div>
+
+  <script>
+    let tableId = null;
+    let token = null;
+    let arInitialized = false;
+    let renderer, scene, camera, controller;
+
+    function getUrlParams() {
+      const params = new URLSearchParams(window.location.search);
+      tableId = params.get('table');
+      token = params.get('token');
+
+      if (!tableId || !token) {
+        showError('Invalid Parameters', 'Missing table or token. Please use a valid QR code link.');
+        return false;
+      }
+      return true;
+    }
+
+    function showError(title, message) {
+      const dialog = document.getElementById('errorDialog');
+      document.getElementById('errorTitle').textContent = title;
+      document.getElementById('errorMessage').textContent = message;
+      dialog.classList.add('show');
+      document.getElementById('errorBtn').addEventListener('click', () => {
+        window.location.href = '/';
+      });
+    }
+
+    function redirectToOrder() {
+      const url = `/order?table=${encodeURIComponent(tableId)}&token=${encodeURIComponent(token)}`;
+      window.location.href = url;
+    }
+
+    function checkARSupport() {
+      return !!(
+        navigator.mediaDevices &&
+        navigator.mediaDevices.getUserMedia &&
+        window.THREEx &&
+        window.ARjs
+      );
+    }
+
+    async function requestCameraPermission() {
+      try {
+        await navigator.mediaDevices.getUserMedia({ video: true });
+        return true;
+      } catch (err) {
+        console.error('Camera permission denied:', err);
+        return false;
+      }
+    }
+
+    async function initAR() {
+      try {
+        const hasPermission = await requestCameraPermission();
+        if (!hasPermission) {
+          activateFallback();
+          return;
+        }
+
+        const container = document.getElementById('arContainer');
+        scene = new THREE.Scene();
+        camera = new THREE.Camera();
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x000000, 1);
+        container.appendChild(renderer.domElement);
+
+        const arToolkitSource = new THREEx.ArToolkitSource({
+          sourceType: 'webcam',
+        });
+
+        arToolkitSource.init(() => {
+          setTimeout(() => {
+            arToolkitSource.onResize();
+            arToolkitSource.copySizeTo(renderer.domElement);
+
+            const arToolkitContext = new THREEx.ArToolkitContext({
+              cameraParametersUrl: 'data:application/octet-stream;base64,AAEAAAAyAAAAyAAAAPgAAADIAAAAgAAAA5gAAAAAAAABkAAAAgAAAANgAAADYAAAA2AAAANgAAADYAAAA2AAAANAAAAAAAAAA=',
+              detectionMode: 'mono'
+            });
+
+            arToolkitContext.init(() => {
+              camera.projectionMatrix.copy(arToolkitContext.getProjectionMatrix());
+            });
+
+            const markerGroup = new THREE.Group();
+            scene.add(markerGroup);
+
+            // Create menu card
+            const menuGeometry = new THREE.PlaneGeometry(1.2, 1.5);
+            const menuMaterial = new THREE.MeshStandardMaterial({
+              color: 0xFFFFFF,
+              emissive: 0xFFFFFF,
+              emissiveIntensity: 0.8,
+              roughness: 0.3
+            });
+            const menuCard = new THREE.Mesh(menuGeometry, menuMaterial);
+            menuCard.position.z = 0;
+            menuCard.castShadow = true;
+            markerGroup.add(menuCard);
+
+            // Create title
+            const titleCanvas = document.createElement('canvas');
+            titleCanvas.width = 512;
+            titleCanvas.height = 128;
+            const titleCtx = titleCanvas.getContext('2d');
+            titleCtx.fillStyle = '#1F2937';
+            titleCtx.fillRect(0, 0, 512, 128);
+            titleCtx.fillStyle = '#FFFFFF';
+            titleCtx.font = 'bold 48px Arial';
+            titleCtx.textAlign = 'center';
+            titleCtx.fillText('Welcome!', 256, 80);
+            const titleTexture = new THREE.CanvasTexture(titleCanvas);
+            const titleMaterial = new THREE.MeshBasicMaterial({ map: titleTexture });
+            const titleGeometry = new THREE.PlaneGeometry(1.1, 0.3);
+            const titleMesh = new THREE.Mesh(titleGeometry, titleMaterial);
+            titleMesh.position.set(0, 0.5, 0.01);
+            markerGroup.add(titleMesh);
+
+            // Create menu text
+            const menuTextCanvas = document.createElement('canvas');
+            menuTextCanvas.width = 512;
+            menuTextCanvas.height = 256;
+            const menuCtx = menuTextCanvas.getContext('2d');
+            menuCtx.fillStyle = '#F3F4F6';
+            menuCtx.fillRect(0, 0, 512, 256);
+            menuCtx.fillStyle = '#111827';
+            menuCtx.font = '24px Arial';
+            menuCtx.textAlign = 'center';
+            menuCtx.fillText('Masala Dosa - ₹60', 256, 50);
+            menuCtx.fillText('Idly - ₹30', 256, 100);
+            menuCtx.fillText('Uttapam - ₹50', 256, 150);
+            menuCtx.fillText('+ More items', 256, 220);
+            const menuTexture = new THREE.CanvasTexture(menuTextCanvas);
+            const menuTextMaterial = new THREE.MeshBasicMaterial({ map: menuTexture });
+            const menuTextGeometry = new THREE.PlaneGeometry(1.1, 0.6);
+            const menuTextMesh = new THREE.Mesh(menuTextGeometry, menuTextMaterial);
+            menuTextMesh.position.set(0, -0.1, 0.01);
+            markerGroup.add(menuTextMesh);
+
+            // Create order button
+            const buttonCanvas = document.createElement('canvas');
+            buttonCanvas.width = 256;
+            buttonCanvas.height = 80;
+            const buttonCtx = buttonCanvas.getContext('2d');
+            buttonCtx.fillStyle = '#10B981';
+            buttonCtx.fillRect(0, 0, 256, 80);
+            buttonCtx.fillStyle = '#FFFFFF';
+            buttonCtx.font = 'bold 28px Arial';
+            buttonCtx.textAlign = 'center';
+            buttonCtx.fillText('ORDER NOW', 128, 50);
+            const buttonTexture = new THREE.CanvasTexture(buttonCanvas);
+            const buttonMaterial = new THREE.MeshBasicMaterial({ map: buttonTexture });
+            const buttonGeometry = new THREE.PlaneGeometry(0.9, 0.25);
+            const orderButton = new THREE.Mesh(buttonGeometry, buttonMaterial);
+            orderButton.position.set(0, -0.75, 0.02);
+            orderButton.userData.isButton = true;
+            markerGroup.add(orderButton);
+
+            // Add lighting
+            const light = new THREE.PointLight(0xFFFFFF, 1, 100);
+            light.position.set(0, 0, 2);
+            scene.add(light);
+
+            const ambientLight = new THREE.AmbientLight(0xFFFFFF, 0.5);
+            scene.add(ambientLight);
+
+            // Animation loop
+            const animate = () => {
+              requestAnimationFrame(animate);
+
+              arToolkitContext.update(arToolkitSource.domElement);
+              markerGroup.matrixAutoUpdate = false;
+              markerGroup.matrix.copy(arToolkitContext.getTransformMatrix());
+
+              // Subtle animation
+              menuCard.rotation.z += 0.001;
+              orderButton.scale.z += Math.sin(Date.now() * 0.005) * 0.0005;
+
+              renderer.render(scene, camera);
+            };
+            animate();
+
+            // Raycaster for button interaction
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2();
+
+            document.addEventListener('click', (event) => {
+              mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+              mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+              raycaster.setFromCamera(mouse, camera);
+              const intersects = raycaster.intersectObjects(markerGroup.children, true);
+
+              for (let i = 0; i < intersects.length; i++) {
+                if (intersects[i].object.userData.isButton) {
+                  redirectToOrder();
+                  break;
+                }
+              }
+            });
+
+            arInitialized = true;
+          }, 100);
+        });
+
+        window.addEventListener('resize', () => {
+          arToolkitSource.onResize();
+          arToolkitSource.copySizeTo(renderer.domElement);
+          camera.projectionMatrix.copy(arToolkitContext.getProjectionMatrix());
+          renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+      } catch (err) {
+        console.error('AR initialization error:', err);
+        activateFallback();
+      }
+    }
+
+    function activateFallback() {
+      document.getElementById('fallbackContainer').classList.add('active');
+      const container = document.getElementById('arContainer');
+      if (container.querySelector('canvas')) {
+        container.querySelector('canvas').style.display = 'none';
+      }
+      const overlay = container.querySelector('.ar-overlay');
+      if (overlay) {
+        overlay.style.display = 'none';
+      }
+    }
+
+    document.getElementById('fallbackBtn').addEventListener('click', redirectToOrder);
+    document.getElementById('fallbackOrderBtn').addEventListener('click', redirectToOrder);
+
+    window.addEventListener('load', async () => {
+      if (!getUrlParams()) {
+        return;
+      }
+
+      if (checkARSupport()) {
+        await initAR();
+      } else {
+        activateFallback();
+      }
+    });
+
+    window.addEventListener('error', (event) => {
+      console.error('Global error:', event.error);
+      activateFallback();
+    });
+  </script>
+</body>
+</html>

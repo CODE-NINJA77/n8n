@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Test Order - Hotel Automation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="max-w-2xl mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-lg p-8">
+            <h1 class="text-3xl font-bold text-gray-900 mb-2">Create Test Order</h1>
+            <p class="text-gray-600 mb-6">Use this tool to create sample orders for testing</p>
+
+            <div class="space-y-4 mb-6">
+                <div>
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">Table Number</label>
+                    <input type="text" id="tableId" placeholder="T001" value="T001" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">Select Items</label>
+                    <div id="itemsList" class="space-y-2 max-h-64 overflow-y-auto border border-gray-200 rounded-lg p-4">
+                        <p class="text-gray-500">Loading items...</p>
+                    </div>
+                </div>
+
+                <button onclick="createOrder()" class="w-full px-6 py-3 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 transition-colors">
+                    Create Order
+                </button>
+            </div>
+
+            <div id="message" class="p-4 rounded-lg hidden"></div>
+        </div>
+    </div>
+
+    <script>
+        const SUPABASE_URL = 'https://uzuybkyzwnegzlvancit.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV6dXlia3l6d25lZ3psdmFuY2l0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ2NjM3NTcsImV4cCI6MjA4MDIzOTc1N30.N9BkDFdIkcgrjmJQLjYiL_EesgmVA4YOwlquOrKZgxE';
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        let menuItems = [];
+        const selectedItems = new Set();
+
+        async function loadMenuItems() {
+            try {
+                const { data, error } = await supabase.from('menu_items').select('item_id, name, price');
+                if (error) throw error;
+                menuItems = data || [];
+                renderItems();
+            } catch (error) {
+                showMessage('Failed to load menu items: ' + error.message, 'error');
+            }
+        }
+
+        function renderItems() {
+            const container = document.getElementById('itemsList');
+            container.innerHTML = menuItems.map(item => `
+                <label class="flex items-center p-3 hover:bg-gray-50 rounded cursor-pointer border border-gray-200">
+                    <input type="checkbox" value="${item.item_id}" onchange="toggleItem(this)" class="w-4 h-4 rounded">
+                    <div class="ml-3 flex-1">
+                        <p class="font-semibold text-gray-900">${item.name}</p>
+                        <p class="text-sm text-gray-600">₹${parseFloat(item.price).toFixed(2)}</p>
+                    </div>
+                </label>
+            `).join('');
+        }
+
+        function toggleItem(checkbox) {
+            if (checkbox.checked) {
+                selectedItems.add(checkbox.value);
+            } else {
+                selectedItems.delete(checkbox.value);
+            }
+        }
+
+        async function createOrder() {
+            const tableId = document.getElementById('tableId').value.trim();
+
+            if (!tableId) {
+                showMessage('Please enter a table number', 'error');
+                return;
+            }
+
+            if (selectedItems.size === 0) {
+                showMessage('Please select at least one item', 'error');
+                return;
+            }
+
+            try {
+                const orderId = `ORD-${Date.now()}`;
+
+                const { error: orderError } = await supabase.from('orders').insert({
+                    order_id: orderId,
+                    table_id: tableId,
+                    status: 'pending'
+                });
+
+                if (orderError) throw orderError;
+
+                const orderItemsData = Array.from(selectedItems).map(itemId => {
+                    const item = menuItems.find(m => m.item_id === itemId);
+                    return {
+                        item_id: `OI-${itemId}-${Date.now()}`,
+                        order_id: orderId,
+                        name: item.name,
+                        qty: 1,
+                        price: item.price,
+                        status: 'pending'
+                    };
+                });
+
+                const { error: itemsError } = await supabase.from('order_items').insert(orderItemsData);
+
+                if (itemsError) throw itemsError;
+
+                showMessage(`Order created successfully! Order ID: ${orderId}`, 'success');
+                selectedItems.clear();
+                document.getElementById('tableId').value = 'T001';
+                renderItems();
+            } catch (error) {
+                showMessage('Failed to create order: ' + error.message, 'error');
+            }
+        }
+
+        function showMessage(text, type) {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.className = `p-4 rounded-lg ${type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`;
+            msg.classList.remove('hidden');
+            setTimeout(() => msg.classList.add('hidden'), 5000);
+        }
+
+        loadMenuItems();
+
+        window.toggleItem = toggleItem;
+        window.createOrder = createOrder;
+    </script>
+</body>
+</html>

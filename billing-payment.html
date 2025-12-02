@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Billing & Payment - Hotel Automation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .slide-up {
+            animation: slideUp 0.5s ease-out;
+        }
+        @keyframes successPulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        .success-pulse {
+            animation: successPulse 0.6s ease-in-out;
+        }
+        .button-loading {
+            pointer-events: none;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="loadingScreen" class="fixed inset-0 bg-white flex items-center justify-center z-50">
+        <div class="text-center">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mb-4"></div>
+            <p class="text-gray-600 font-semibold">Loading bill details...</p>
+        </div>
+    </div>
+
+    <div id="errorScreen" class="hidden fixed inset-0 bg-white flex items-center justify-center z-50">
+        <div class="text-center max-w-md mx-auto px-4">
+            <svg class="mx-auto h-16 w-16 text-red-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <h1 class="text-2xl font-bold text-gray-900 mb-2">Error</h1>
+            <p id="errorMessage" class="text-gray-600 mb-6"></p>
+            <button onclick="location.reload()" class="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors">
+                Retry
+            </button>
+        </div>
+    </div>
+
+    <div id="successScreen" class="hidden fixed inset-0 bg-gradient-to-b from-green-50 to-green-100 flex items-center justify-center z-50">
+        <div class="text-center max-w-md mx-auto px-4 slide-up">
+            <svg class="mx-auto h-24 w-24 text-green-500 mb-6 success-pulse" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+            </svg>
+            <h1 class="text-4xl font-bold text-green-900 mb-3">Payment Successful!</h1>
+            <p class="text-lg text-green-700 mb-2">Thank you for your visit</p>
+            <p class="text-green-600 mb-8">Your payment has been processed successfully.</p>
+            <div class="space-y-3">
+                <p id="successOrderId" class="text-sm text-gray-600"></p>
+                <button onclick="location.href='/'" class="w-full px-6 py-3 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 transition-colors">
+                    Back to Home
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="cancelScreen" class="hidden fixed inset-0 bg-gradient-to-b from-red-50 to-red-100 flex items-center justify-center z-50">
+        <div class="text-center max-w-md mx-auto px-4 slide-up">
+            <svg class="mx-auto h-24 w-24 text-red-500 mb-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l-2-2m0 0l-2-2m2 2l2-2m-2 2l-2 2m2-2l2 2m-2-2l-2-2"></path>
+            </svg>
+            <h1 class="text-4xl font-bold text-red-900 mb-3">Payment Cancelled</h1>
+            <p class="text-lg text-red-700 mb-2">Transaction was not completed</p>
+            <p class="text-red-600 mb-8">Your payment has been cancelled. Please try again.</p>
+            <button onclick="location.href=location.pathname + '?table=' + getUrlParam('table')" class="w-full px-6 py-3 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition-colors">
+                Retry Payment
+            </button>
+        </div>
+    </div>
+
+    <div id="billScreen" class="hidden pb-24">
+        <header class="bg-gradient-to-r from-green-600 to-emerald-600 shadow-lg sticky top-0 z-40">
+            <div class="max-w-2xl mx-auto px-4 py-6">
+                <h1 class="text-3xl font-bold text-white">Billing & Payment</h1>
+                <p id="tableInfo" class="text-green-100 text-lg mt-2"></p>
+            </div>
+        </header>
+
+        <main class="max-w-2xl mx-auto px-4 py-6">
+            <div class="bg-white rounded-lg shadow-md p-6 fade-in">
+                <h2 class="text-xl font-bold text-gray-900 mb-4">Order Items</h2>
+                <div id="itemsList" class="space-y-3 mb-6">
+                    <div class="flex justify-center">
+                        <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
+                    </div>
+                </div>
+
+                <div class="border-t-2 border-gray-200 pt-6">
+                    <div class="space-y-3 mb-6">
+                        <div class="flex justify-between text-gray-700">
+                            <span>Subtotal</span>
+                            <span class="font-semibold">₹<span id="subtotal">0.00</span></span>
+                        </div>
+                        <div class="flex justify-between text-gray-700">
+                            <span>Tax (5%)</span>
+                            <span class="font-semibold">₹<span id="tax">0.00</span></span>
+                        </div>
+                        <div class="flex justify-between items-center bg-green-50 p-4 rounded-lg border-2 border-green-200">
+                            <span class="text-xl font-bold text-gray-900">Total Amount</span>
+                            <span class="text-3xl font-bold text-green-600">₹<span id="total">0.00</span></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <div class="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-200 shadow-2xl">
+            <div class="max-w-2xl mx-auto px-4 py-4">
+                <button
+                    id="payButton"
+                    onclick="processPayment()"
+                    class="w-full px-6 py-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg font-bold text-lg hover:from-green-600 hover:to-emerald-600 transition-all active:scale-95 shadow-lg"
+                >
+                    Pay ₹<span id="payButtonAmount">0.00</span> Now
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://uzuybkyzwnegzlvancit.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV6dXlia3l6d25lZ3psdmFuY2l0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ2NjM3NTcsImV4cCI6MjA4MDIzOTc1N30.N9BkDFdIkcgrjmJQLjYiL_EesgmVA4YOwlquOrKZgxE';
+        const N8N_WEBHOOK_URL = 'https://n8n-ninja.app.n8n.cloud/webhook/order-create';
+
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        let currentOrder = null;
+        let billData = {
+            subtotal: 0,
+            tax: 0,
+            total: 0
+        };
+
+        function getUrlParam(param) {
+            const params = new URLSearchParams(window.location.search);
+            return params.get(param);
+        }
+
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('loadingScreen').classList.add('hidden');
+            document.getElementById('errorScreen').classList.remove('hidden');
+        }
+
+        function showSuccess(orderId) {
+            document.getElementById('successOrderId').textContent = `Order ID: ${orderId}`;
+            document.getElementById('billScreen').classList.add('hidden');
+            document.getElementById('successScreen').classList.remove('hidden');
+        }
+
+        function showCancel() {
+            document.getElementById('billScreen').classList.add('hidden');
+            document.getElementById('cancelScreen').classList.remove('hidden');
+        }
+
+        function formatPrice(price) {
+            return parseFloat(price || 0).toFixed(2);
+        }
+
+        function calculateBill(items) {
+            let subtotal = 0;
+
+            items.forEach(item => {
+                const price = parseFloat(item.price || 0);
+                const qty = parseInt(item.qty || 0);
+                subtotal += price * qty;
+            });
+
+            const tax = subtotal * 0.05;
+            const total = subtotal + tax;
+
+            billData = {
+                subtotal: subtotal,
+                tax: tax,
+                total: total
+            };
+
+            document.getElementById('subtotal').textContent = formatPrice(subtotal);
+            document.getElementById('tax').textContent = formatPrice(tax);
+            document.getElementById('total').textContent = formatPrice(total);
+            document.getElementById('payButtonAmount').textContent = formatPrice(total);
+        }
+
+        async function loadBill() {
+            try {
+                const table = getUrlParam('table');
+
+                if (!table) {
+                    showError('Invalid table ID. Please scan the QR code again.');
+                    return;
+                }
+
+                const { data: orderData, error: orderError } = await supabase
+                    .from('orders')
+                    .select(`
+                        order_id,
+                        table_id,
+                        status,
+                        created_at,
+                        order_items (
+                            item_id,
+                            name,
+                            qty
+                        )
+                    `)
+                    .eq('table_id', table)
+                    .neq('status', 'paid')
+                    .order('created_at', { ascending: false })
+                    .maybeSingle();
+
+                if (orderError) {
+                    showError('Failed to load order: ' + orderError.message);
+                    return;
+                }
+
+                if (!orderData) {
+                    showError('No active order found for this table.');
+                    return;
+                }
+
+                currentOrder = orderData;
+                document.getElementById('tableInfo').textContent = `Table: ${orderData.table_id}`;
+
+                const itemIds = orderData.order_items.map(item => item.item_id);
+
+                if (itemIds.length === 0) {
+                    showError('No items found in this order.');
+                    return;
+                }
+
+                const { data: menuItems, error: menuError } = await supabase
+                    .from('menu_items')
+                    .select('item_id, price')
+                    .in('item_id', itemIds);
+
+                if (menuError) {
+                    showError('Failed to load menu items: ' + menuError.message);
+                    return;
+                }
+
+                const itemsWithPrices = orderData.order_items.map(orderItem => {
+                    const menuItem = menuItems?.find(m => m.item_id === orderItem.item_id) || {};
+                    return {
+                        ...orderItem,
+                        price: menuItem.price || orderItem.price || 0
+                    };
+                });
+
+                renderItems(itemsWithPrices);
+                calculateBill(itemsWithPrices);
+
+                document.getElementById('loadingScreen').classList.add('hidden');
+                document.getElementById('billScreen').classList.remove('hidden');
+
+            } catch (error) {
+                console.error('Error loading bill:', error);
+                showError('An unexpected error occurred. Please try again.');
+            }
+        }
+
+        function renderItems(items) {
+            const itemsList = document.getElementById('itemsList');
+            itemsList.innerHTML = items.map((item, index) => {
+                const lineTotal = (parseFloat(item.price) * parseInt(item.qty)).toFixed(2);
+                return `
+                    <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200 fade-in" style="animation-delay: ${index * 50}ms">
+                        <div class="flex-1">
+                            <h3 class="font-semibold text-gray-900">${item.name}</h3>
+                            <p class="text-sm text-gray-600">₹${formatPrice(item.price)} × ${item.qty}</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-lg font-bold text-gray-900">₹${lineTotal}</p>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function processPayment() {
+            try {
+                const payButton = document.getElementById('payButton');
+                payButton.classList.add('button-loading');
+                payButton.disabled = true;
+                payButton.textContent = 'Processing...';
+
+                const payload = {
+                    orderId: currentOrder.order_id
+                };
+
+                const response = await fetch(N8N_WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server returned status ${response.status}`);
+                }
+
+                const responseData = await response.json();
+
+                if (responseData.checkoutUrl) {
+                    window.location.href = responseData.checkoutUrl;
+                } else {
+                    throw new Error('No checkout URL in response');
+                }
+
+            } catch (error) {
+                console.error('Payment error:', error);
+                const payButton = document.getElementById('payButton');
+                payButton.classList.remove('button-loading');
+                payButton.disabled = false;
+                payButton.textContent = `Pay ₹${document.getElementById('payButtonAmount').textContent} Now`;
+                alert('Payment processing failed. Please try again.');
+            }
+        }
+
+        window.getUrlParam = getUrlParam;
+        window.processPayment = processPayment;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const success = getUrlParam('success');
+            const cancel = getUrlParam('cancel');
+
+            document.getElementById('loadingScreen').classList.remove('hidden');
+
+            if (success === '1') {
+                document.getElementById('loadingScreen').classList.add('hidden');
+                showSuccess(getUrlParam('orderId') || 'N/A');
+            } else if (cancel === '1') {
+                document.getElementById('loadingScreen').classList.add('hidden');
+                showCancel();
+            } else {
+                loadBill();
+            }
+        });
+    </script>
+</body>
+</html>
