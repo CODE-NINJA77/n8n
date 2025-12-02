@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Waiter Dashboard - Hotel Automation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/config.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            animation: fadeIn 0.3s ease-in;
+        }
+        .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <header class="bg-gradient-to-r from-green-600 to-emerald-600 shadow-lg sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 py-6">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h1 class="text-4xl font-bold text-white">Waiter Dashboard</h1>
+                    <p class="text-green-100 text-lg mt-1">Deliver dishes to customers</p>
+                </div>
+                <button
+                    id="logoutBtn"
+                    class="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 text-white rounded-lg font-semibold transition-all"
+                >
+                    Logout
+                </button>
+            </div>
+            <div class="mt-3 flex items-center gap-2">
+                <div class="w-3 h-3 bg-white rounded-full pulse-dot"></div>
+                <span class="text-sm text-green-100">Live updates enabled</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-8">
+        <div id="ordersContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div class="col-span-full text-center py-12">
+                <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
+                <p class="mt-4 text-gray-600">Loading ready orders...</p>
+            </div>
+        </div>
+    </main>
+
+    <div id="toastContainer"></div>
+
+    <script>
+        const config = window.APP_CONFIG || {};
+        const SUPABASE_URL = config.SUPABASE_URL || 'REPLACE_WITH_SUPABASE_URL';
+        const SUPABASE_KEY = config.SUPABASE_KEY || 'REPLACE_WITH_SUPABASE_ANON_KEY';
+        const ORDER_SERVED_URL = config.getWebhookUrl ? config.getWebhookUrl('ORDER_SERVED') : '';
+        const WEBHOOK_SECRET = config.WEBHOOK_SECRET || 'demo-secret-change-in-production';
+
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        let realtimeChannel = null;
+
+        function checkAuth() {
+            const session = sessionStorage.getItem('staffSession');
+            if (!session) {
+                window.location.href = '/kitchen-login.html';
+                return false;
+            }
+
+            try {
+                const { role, timestamp } = JSON.parse(session);
+                const now = new Date().getTime();
+                const sessionAge = now - timestamp;
+                const maxAge = 8 * 60 * 60 * 1000;
+
+                if (sessionAge >= maxAge || role !== 'waiter') {
+                    sessionStorage.removeItem('staffSession');
+                    window.location.href = '/kitchen-login.html';
+                    return false;
+                }
+            } catch (error) {
+                sessionStorage.removeItem('staffSession');
+                window.location.href = '/kitchen-login.html';
+                return false;
+            }
+
+            return true;
+        }
+
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            sessionStorage.removeItem('staffSession');
+            window.location.href = '/kitchen-login.html';
+        });
+
+        function showToast(message, type = 'success') {
+            const toastContainer = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast px-6 py-4 rounded-lg shadow-lg ${
+                type === 'success' ? 'bg-green-500' : 'bg-red-500'
+            } text-white font-semibold`;
+            toast.textContent = message;
+            toastContainer.appendChild(toast);
+
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+
+            if (navigator.vibrate) {
+                navigator.vibrate(200);
+            }
+        }
+
+        function getTimeSince(timestamp) {
+            if (!timestamp) return '';
+            const now = new Date();
+            const orderTime = new Date(timestamp);
+            const diffMs = now - orderTime;
+            const diffMins = Math.floor(diffMs / 60000);
+
+            if (diffMins < 1) return 'Just now';
+            if (diffMins < 60) return `${diffMins} min ago`;
+            const diffHours = Math.floor(diffMins / 60);
+            return `${diffHours}h ${diffMins % 60}m ago`;
+        }
+
+        async function markServed(orderId, servedItems) {
+            try {
+                const payload = {
+                    orderId: orderId,
+                    servedItems: servedItems,
+                    timestamp: new Date().toISOString()
+                };
+
+                if (ORDER_SERVED_URL) {
+                    const response = await fetch(ORDER_SERVED_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Webhook-Secret': WEBHOOK_SECRET
+                        },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Webhook returned status ${response.status}`);
+                    }
+                }
+
+                try {
+                    await supabase
+                        .from('order_items')
+                        .update({ status: 'served' })
+                        .in('order_item_id', servedItems);
+
+                    const { data: remainingItems } = await supabase
+                        .from('order_items')
+                        .select('order_item_id')
+                        .eq('order_id', orderId)
+                        .neq('status', 'served');
+
+                    if (!remainingItems || remainingItems.length === 0) {
+                        await supabase
+                            .from('orders')
+                            .update({ status: 'closed' })
+                            .eq('order_id', orderId);
+                    } else {
+                        await supabase
+                            .from('orders')
+                            .update({ status: 'served' })
+                            .eq('order_id', orderId);
+                    }
+                } catch (dbError) {
+                    console.warn('Database update failed:', dbError);
+                }
+
+                showToast('Order marked as served', 'success');
+                await loadOrders();
+            } catch (error) {
+                console.error('Error marking order as served:', error);
+                showToast('Failed to mark order as served', 'error');
+            }
+        }
+
+        function renderOrders(orders) {
+            const container = document.getElementById('ordersContainer');
+
+            if (!orders || orders.length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-full text-center py-12">
+                        <svg class="mx-auto h-24 w-24 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path>
+                        </svg>
+                        <p class="mt-4 text-xl text-gray-600 font-semibold">No orders ready</p>
+                        <p class="text-gray-500">Check back soon</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = orders.map(order => {
+                const readyItems = (order.order_items || []).filter(item => item.status === 'ready');
+                const itemIds = readyItems.map(item => item.order_item_id);
+
+                return `
+                    <div class="bg-white rounded-xl shadow-md p-6 fade-in hover:shadow-lg transition-shadow border-l-4 border-green-500">
+                        <div class="flex justify-between items-start mb-4">
+                            <div>
+                                <h2 class="text-5xl font-bold text-gray-900">TABLE ${order.table_id}</h2>
+                                <p class="text-sm text-gray-500 mt-2 font-mono">#${order.order_id.substring(0, 8)}</p>
+                                <p class="text-xs text-gray-400 mt-1">${getTimeSince(order.created_at)}</p>
+                            </div>
+                            <div class="bg-green-100 px-4 py-2 rounded-full">
+                                <span class="text-green-800 font-bold text-lg">${readyItems.length} READY</span>
+                            </div>
+                        </div>
+
+                        <div class="border-t border-gray-200 pt-4 mb-4">
+                            <div class="space-y-3">
+                                ${readyItems.map(item => `
+                                    <div class="bg-green-50 border-l-4 border-green-500 p-3 rounded">
+                                        <div class="flex justify-between items-center">
+                                            <div>
+                                                <h3 class="text-lg font-semibold text-gray-900">${item.name}</h3>
+                                                <p class="text-sm text-gray-600">Quantity: <span class="font-bold">${item.qty}</span></p>
+                                            </div>
+                                            <span class="px-3 py-1 rounded-full text-xs font-bold bg-green-500 text-white">
+                                                READY
+                                            </span>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <button
+                            onclick="markServed('${order.order_id}', ${JSON.stringify(itemIds)})"
+                            class="w-full px-6 py-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg font-bold text-lg hover:from-green-600 hover:to-emerald-600 transition-all active:scale-95 shadow-md"
+                        >
+                            ✓ MARK SERVED
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function loadOrders() {
+            try {
+                const { data, error } = await supabase
+                    .from('orders')
+                    .select(`
+                        order_id,
+                        table_id,
+                        status,
+                        created_at,
+                        order_items (
+                            order_item_id,
+                            name,
+                            qty,
+                            status
+                        )
+                    `)
+                    .eq('status', 'ready')
+                    .order('created_at', { ascending: false });
+
+                if (error) throw error;
+
+                const ordersWithReadyItems = (data || []).filter(order => {
+                    const readyItems = (order.order_items || []).filter(item => item.status === 'ready');
+                    return readyItems.length > 0;
+                });
+
+                renderOrders(ordersWithReadyItems);
+            } catch (error) {
+                console.error('Error loading orders:', error);
+                const container = document.getElementById('ordersContainer');
+                container.innerHTML = `
+                    <div class="col-span-full text-center py-12">
+                        <svg class="mx-auto h-24 w-24 text-red-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <p class="mt-4 text-xl text-red-600 font-semibold">Error loading orders</p>
+                        <p class="text-gray-500">${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function setupRealtime() {
+            realtimeChannel = supabase
+                .channel('waiter-updates')
+                .on(
+                    'postgres_changes',
+                    {
+                        event: '*',
+                        schema: 'public',
+                        table: 'orders'
+                    },
+                    (payload) => {
+                        console.log('Order update:', payload);
+                        loadOrders();
+                    }
+                )
+                .on(
+                    'postgres_changes',
+                    {
+                        event: '*',
+                        schema: 'public',
+                        table: 'order_items'
+                    },
+                    (payload) => {
+                        console.log('Order item update:', payload);
+                        if (payload.new && payload.new.status === 'ready') {
+                            showToast('New item ready for delivery', 'success');
+                        }
+                        loadOrders();
+                    }
+                )
+                .subscribe();
+        }
+
+        window.markServed = markServed;
+
+        if (checkAuth()) {
+            loadOrders();
+            setupRealtime();
+            setInterval(loadOrders, 5000);
+        }
+    </script>
+</body>
+</html>

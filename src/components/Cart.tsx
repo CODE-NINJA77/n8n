@@ -4,7 +4,7 @@ import { useState } from 'react';
 interface CartItem {
   itemId: string;
   name: string;
-  price: number;
+  priceCents: number;
   quantity: number;
 }
 
@@ -17,8 +17,9 @@ interface CartProps {
 export default function Cart({ items, onPlaceOrder, submitting }: CartProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const total = items.reduce((sum, item) => sum + (item.priceCents / 100) * item.quantity, 0);
   const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
+  const formatPrice = (cents: number) => (cents / 100).toFixed(2);
 
   if (items.length === 0) {
     return (
@@ -59,9 +60,9 @@ export default function Cart({ items, onPlaceOrder, submitting }: CartProps) {
                 <div key={item.itemId} className="flex justify-between items-center pb-3 border-b border-slate-200 last:border-0">
                   <div className="flex-1">
                     <p className="font-semibold text-slate-900">{item.name}</p>
-                    <p className="text-sm text-slate-600">₹{item.price} × {item.quantity}</p>
+                    <p className="text-sm text-slate-600">₹{formatPrice(item.priceCents)} × {item.quantity}</p>
                   </div>
-                  <p className="font-bold text-emerald-600 text-lg">₹{item.price * item.quantity}</p>
+                  <p className="font-bold text-emerald-600 text-lg">₹{(formatPrice(item.priceCents * item.quantity))}</p>
                 </div>
               ))}
             </div>
@@ -69,7 +70,7 @@ export default function Cart({ items, onPlaceOrder, submitting }: CartProps) {
             <div className="border-t border-slate-200 bg-slate-50 px-6 py-4">
               <div className="flex justify-between items-center mb-4">
                 <span className="text-slate-600 font-medium">Subtotal ({itemCount} items)</span>
-                <span className="text-2xl font-bold text-emerald-600">₹{total}</span>
+                <span className="text-2xl font-bold text-emerald-600">₹{total.toFixed(2)}</span>
               </div>
 
               <button
@@ -100,7 +101,7 @@ export default function Cart({ items, onPlaceOrder, submitting }: CartProps) {
               </span>
             )}
             <div className="absolute bottom-full right-0 mb-2 bg-slate-900 text-white text-xs font-semibold px-2 py-1 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-              ₹{total}
+              ₹{total.toFixed(2)}
             </div>
           </button>
         )}

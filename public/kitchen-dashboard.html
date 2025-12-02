@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kitchen Dashboard - Hotel Automation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/config.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            animation: fadeIn 0.3s ease-in;
+        }
+        .realtime-indicator { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <header class="bg-gradient-to-r from-orange-500 to-orange-600 shadow-lg sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 py-6">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h1 class="text-4xl font-bold text-white">Kitchen Dashboard</h1>
+                    <p class="text-orange-100 text-lg mt-1">Live Order Status</p>
+                </div>
+                <button
+                    id="logoutBtn"
+                    class="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 text-white rounded-lg font-semibold transition-all"
+                >
+                    Logout
+                </button>
+            </div>
+            <div class="mt-3 flex items-center gap-2">
+                <div class="w-3 h-3 bg-white rounded-full realtime-indicator"></div>
+                <span class="text-sm text-orange-100">Live updates enabled</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-8">
+        <div id="ordersContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div class="col-span-full text-center py-12">
+                <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600"></div>
+                <p class="mt-4 text-gray-600 font-semibold">Loading orders...</p>
+            </div>
+        </div>
+    </main>
+
+    <div id="toastContainer"></div>
+
+    <script>
+        const config = window.APP_CONFIG || {};
+        const SUPABASE_URL = config.SUPABASE_URL || 'REPLACE_WITH_SUPABASE_URL';
+        const SUPABASE_KEY = config.SUPABASE_KEY || 'REPLACE_WITH_SUPABASE_ANON_KEY';
+        const KITCHEN_UPDATE_URL = config.getWebhookUrl ? config.getWebhookUrl('KITCHEN_UPDATE') : '';
+        const WEBHOOK_SECRET = config.WEBHOOK_SECRET || 'demo-secret-change-in-production';
+
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        let realtimeChannel = null;
+
+        function checkAuth() {
+            const session = sessionStorage.getItem('staffSession');
+            if (!session) {
+                window.location.href = '/kitchen-login.html';
+                return false;
+            }
+
+            try {
+                const { role, timestamp } = JSON.parse(session);
+                const now = new Date().getTime();
+                const sessionAge = now - timestamp;
+                const maxAge = 8 * 60 * 60 * 1000;
+
+                if (sessionAge >= maxAge || role !== 'kitchen') {
+                    sessionStorage.removeItem('staffSession');
+                    window.location.href = '/kitchen-login.html';
+                    return false;
+                }
+            } catch (error) {
+                sessionStorage.removeItem('staffSession');
+                window.location.href = '/kitchen-login.html';
+                return false;
+            }
+
+            return true;
+        }
+
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            sessionStorage.removeItem('staffSession');
+            window.location.href = '/kitchen-login.html';
+        });
+
+        function showToast(message, type = 'success') {
+            const toastContainer = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast px-6 py-4 rounded-lg shadow-lg ${
+                type === 'success' ? 'bg-green-500' : 'bg-red-500'
+            } text-white font-semibold`;
+            toast.textContent = message;
+            toastContainer.appendChild(toast);
+
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        function getStatusColor(status) {
+            switch (status?.toLowerCase()) {
+                case 'pending':
+                    return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+                case 'preparing':
+                    return 'bg-blue-100 text-blue-800 border-blue-300';
+                case 'ready':
+                    return 'bg-green-100 text-green-800 border-green-300';
+                default:
+                    return 'bg-gray-100 text-gray-800 border-gray-300';
+            }
+        }
+
+        function getTimeSince(timestamp) {
+            if (!timestamp) return '';
+            const now = new Date();
+            const orderTime = new Date(timestamp);
+            const diffMs = now - orderTime;
+            const diffMins = Math.floor(diffMs / 60000);
+
+            if (diffMins < 1) return 'Just now';
+            if (diffMins < 60) return `${diffMins} min ago`;
+            const diffHours = Math.floor(diffMins / 60);
+            return `${diffHours}h ${diffMins % 60}m ago`;
+        }
+
+        async function updateItemStatus(orderId, orderItemId, newStatus) {
+            try {
+                const { error } = await supabase
+                    .from('order_items')
+                    .update({ status: newStatus })
+                    .eq('order_item_id', orderItemId);
+
+                if (error) throw error;
+
+                if (KITCHEN_UPDATE_URL) {
+                    try {
+                        await fetch(KITCHEN_UPDATE_URL, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Webhook-Secret': WEBHOOK_SECRET
+                            },
+                            body: JSON.stringify({
+                                orderId: orderId,
+                                updates: [{ orderItemId: orderItemId, status: newStatus }]
+                            })
+                        });
+                    } catch (webhookError) {
+                        console.warn('Webhook notification failed:', webhookError);
+                    }
+                }
+
+                showToast(`Item marked as ${newStatus}`, 'success');
+                await loadOrders();
+            } catch (error) {
+                console.error('Error updating item status:', error);
+                showToast('Failed to update item status', 'error');
+            }
+        }
+
+        function renderOrders(orders) {
+            const container = document.getElementById('ordersContainer');
+
+            if (!orders || orders.length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-full text-center py-12">
+                        <svg class="mx-auto h-24 w-24 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                        </svg>
+                        <p class="mt-4 text-xl text-gray-600 font-semibold">No active orders</p>
+                        <p class="text-gray-500">All caught up</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = orders.map(order => `
+                <div class="bg-white rounded-xl shadow-md p-6 fade-in hover:shadow-xl transition-shadow border-l-4 border-orange-500">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h2 class="text-4xl font-bold text-gray-900">TABLE ${order.table_id}</h2>
+                            <p class="text-sm text-gray-500 mt-1 font-mono">#${order.order_id.substring(0, 8)}</p>
+                        </div>
+                        <div class="text-right">
+                            <span class="inline-block px-3 py-1 rounded-full text-xs font-bold ${
+                                order.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                                order.status === 'in_kitchen' ? 'bg-orange-100 text-orange-800' :
+                                'bg-blue-100 text-blue-800'
+                            }">
+                                ${order.status?.toUpperCase() || 'PENDING'}
+                            </span>
+                            <p class="text-xs text-gray-500 mt-1">${getTimeSince(order.created_at)}</p>
+                        </div>
+                    </div>
+
+                    <div class="border-t-2 border-gray-100 pt-4">
+                        <div class="space-y-4">
+                            ${(order.order_items || []).map(item => `
+                                <div class="border-l-4 ${
+                                    item.status === 'ready' ? 'border-green-500 bg-green-50' :
+                                    item.status === 'preparing' ? 'border-blue-500 bg-blue-50' :
+                                    'border-gray-300 bg-gray-50'
+                                } p-4 rounded-r">
+                                    <div class="flex justify-between items-start mb-3">
+                                        <div class="flex-1">
+                                            <h3 class="text-lg font-bold text-gray-900">${item.name}</h3>
+                                            <p class="text-sm text-gray-600 mt-1">
+                                                <span class="font-bold text-lg">×${item.qty}</span>
+                                            </p>
+                                        </div>
+                                        <span class="px-3 py-1 rounded-full text-xs font-bold border-2 ${getStatusColor(item.status)}">
+                                            ${item.status?.toUpperCase() || 'PENDING'}
+                                        </span>
+                                    </div>
+                                    <div class="flex gap-2">
+                                        <button
+                                            onclick="updateItemStatus('${order.order_id}', '${item.order_item_id}', 'preparing')"
+                                            class="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow"
+                                            ${item.status === 'preparing' || item.status === 'ready' ? 'disabled' : ''}
+                                        >
+                                            ${item.status === 'preparing' ? '✓ Preparing' : 'Start Preparing'}
+                                        </button>
+                                        <button
+                                            onclick="updateItemStatus('${order.order_id}', '${item.order_item_id}', 'ready')"
+                                            class="flex-1 px-4 py-2 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow"
+                                            ${item.status === 'ready' ? 'disabled' : ''}
+                                        >
+                                            ${item.status === 'ready' ? '✓ Ready' : 'Mark Ready'}
+                                        </button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function loadOrders() {
+            try {
+                const { data, error } = await supabase
+                    .from('orders')
+                    .select(`
+                        order_id,
+                        table_id,
+                        status,
+                        created_at,
+                        updated_at,
+                        order_items (
+                            order_item_id,
+                            menu_item_id,
+                            name,
+                            qty,
+                            status
+                        )
+                    `)
+                    .in('status', ['pending', 'in_kitchen', 'preparing'])
+                    .order('created_at', { ascending: false });
+
+                if (error) throw error;
+
+                renderOrders(data);
+            } catch (error) {
+                console.error('Error loading orders:', error);
+                const container = document.getElementById('ordersContainer');
+                container.innerHTML = `
+                    <div class="col-span-full text-center py-12">
+                        <svg class="mx-auto h-24 w-24 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <p class="mt-4 text-xl text-red-600 font-semibold">Error loading orders</p>
+                        <p class="text-gray-500">${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function setupRealtime() {
+            realtimeChannel = supabase
+                .channel('kitchen-updates')
+                .on(
+                    'postgres_changes',
+                    {
+                        event: '*',
+                        schema: 'public',
+                        table: 'orders'
+                    },
+                    (payload) => {
+                        console.log('Order update:', payload);
+                        loadOrders();
+                    }
+                )
+                .on(
+                    'postgres_changes',
+                    {
+                        event: '*',
+                        schema: 'public',
+                        table: 'order_items'
+                    },
+                    (payload) => {
+                        console.log('Order item update:', payload);
+                        loadOrders();
+                    }
+                )
+                .subscribe();
+        }
+
+        window.updateItemStatus = updateItemStatus;
+
+        if (checkAuth()) {
+            loadOrders();
+            setupRealtime();
+            setInterval(loadOrders, 10000);
+        }
+    </script>
+</body>
+</html>
